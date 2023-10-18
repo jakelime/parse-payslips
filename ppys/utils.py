@@ -1,7 +1,58 @@
+import os
 import logging
+import dotenv
+from pathlib import Path
 
-APP_NAME = "pdfdc"
 
+APP_NAME = "ppys"
+
+
+class NonePath:
+    # Monkey patching to create a "None" Path object
+
+    @staticmethod
+    def is_file():
+        return False
+
+    @staticmethod
+    def is_dir():
+        return False
+
+    @staticmethod
+    def exists():
+        return False
+
+
+class PathFinder:
+    def __init__(self, resources_foldername: str = "resources"):
+        self.cwd = Path(__file__).parent
+        if resources_foldername:
+            self.set_resources_dir(resources_foldername)
+        else:
+            self.resources_dir = NonePath()
+
+    def __call__(self, name) -> Path:
+        return self.get_resource(name)
+
+    def set_resources_dir(self, name: str = "resources") -> Path:
+        resources_dir = self.cwd / name
+        if not resources_dir.is_dir():
+            raise NotADirectoryError(f"target resources_dir={resources_dir}")
+        self.resources_dir = resources_dir
+        return resources_dir
+
+    def get_resources_dir(self, name: str = "") -> Path:
+        if name:
+            self.set_resources_dir(name)
+        else:
+            self.set_resources_dir()
+        return self.resources_dir  # type: ignore (handled by set_resources_dir)
+
+    def get_resource(self, name: str) -> Path:
+        fp = self.get_resources_dir() / name  # type: ignore
+        if not fp.is_file():
+            raise FileNotFoundError(f"{fp=}")
+        return fp
 
 
 def init_logger(name: str = "") -> logging.Logger:
@@ -31,3 +82,13 @@ def init_logger(name: str = "") -> logging.Logger:
     logger.setLevel(logging.INFO)
     logger.info(f"logger initialized - {logger_filename}")
     return logger
+
+
+def load_environment():
+    dotenv.load_dotenv()
+    PASSWORD = os.getenv("PASSWORD")
+    print(f"{PASSWORD=}")
+
+
+if __name__ == "__main__":
+    load_environment()
