@@ -1,6 +1,4 @@
-import os
 import logging
-import dotenv
 from pathlib import Path
 
 
@@ -84,11 +82,5 @@ def init_logger(name: str = "") -> logging.Logger:
     return logger
 
 
-def load_environment():
-    dotenv.load_dotenv()
-    PASSWORD = os.getenv("PASSWORD")
-    print(f"{PASSWORD=}")
-
-
 if __name__ == "__main__":
-    load_environment()
+    pass
