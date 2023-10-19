@@ -376,8 +376,8 @@ def main():
     outname = "output.xlsx"
     df = pd.concat(dflist)
     print(df)
-    # df.to_excel("output.xlsx")
-    # lg.info(f"exported {outname}")
+    df.to_excel("output.xlsx")
+    lg.info(f"exported {outname}")
 
 
 if __name__ == "__main__":
