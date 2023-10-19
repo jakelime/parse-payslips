@@ -65,7 +65,7 @@ class PdfObject:
         dfs = tabula.io.read_pdf(
             self.filepath,
             pages=[1],
-            pandas_options={"header": 0},
+            pandas_options={"header": None},
             area=area,  # [top, left, bottom, right]
             relative_area=True,  # enables % from area argument
         )
@@ -106,7 +106,8 @@ class PdfObject:
 
 class AmsPayslip(PdfObject):
     date: datetime.date
-    net_pay: Decimal
+    actual_net_pay: Decimal
+    accounting_pay: Decimal
     basic_pay: Decimal
     bonus_pay: Decimal
     aws_pay: Decimal
@@ -134,7 +135,7 @@ class AmsPayslip(PdfObject):
     ):
         super().__init__(filepath)
         self.date = datetime.date(year=1, month=1, day=1)
-        self.net_pay = Decimal("0.00")
+        self.accounting_pay = Decimal("0.00")
         self.basic_pay = Decimal("0.00") if not basic_pay else Decimal(basic_pay)
         self.bonus_pay = Decimal("0.00") if not bonus_pay else Decimal(bonus_pay)
         self.aws_pay = Decimal("0.00") if not aws_pay else Decimal(aws_pay)
@@ -163,7 +164,7 @@ class AmsPayslip(PdfObject):
     def __repr__(self) -> str:
         return f"""{self.__class__.__name__}(
         date={self.date}
-        basic_pay={self.basic_pay}, net_pay={self.net_pay},
+        basic_pay={self.basic_pay}, accounting_pay={self.accounting_pay},
         bonus_pay={self.bonus_pay}, allowances_work={self.allowances_work},
         deductable_cpf={self.deductable_cpf}, deductable_cdc={self.deductable_cdc},
         deductable_pay={self.deductable_pay},
@@ -202,18 +203,39 @@ class AmsPayslip(PdfObject):
             data_entries.append(kw)
         except Exception as e:
             lg.warning(f"basic_pay parse error: {e=}")
+
+        # PROSPERITY ANG BAO *
+        try:
+            for kw in [
+                "PROSPERITY ANG BAO *",
+                "URGENT TASK ALLOWANCE (A)",
+                "TAXI CLAIM *",
+            ]:
+                try:
+                    value = df.loc[kw, column_current].replace(",", "")
+                except KeyError:
+                    continue
+                if value:
+                    self.allowances_work += Decimal(value)
+                    data_entries.append(kw)
+        except Exception as e:
+            lg.warning(f"allowances_pckg parse error: {e=}")
+
         try:
             for kw in [
                 "MOBILE PHONE SUBSIDY",
                 "EXECUTIVE HEALTH SCREENING",
                 "HEALTH INSURANCE PREMIUM (SELF",
             ]:
-                value = df.loc[kw, column_current].replace(",", "")
+                try:
+                    value = df.loc[kw, column_current].replace(",", "")
+                except KeyError:
+                    continue
                 if value:
                     self.allowances_pckg += Decimal(value)
                     data_entries.append(kw)
         except Exception as e:
-            lg.warning(f"basic_pay parse error: {e=}")
+            lg.warning(f"allowances_pckg parse error: {e=}")
 
         try:
             for kw in [
@@ -223,13 +245,18 @@ class AmsPayslip(PdfObject):
                 "SEVERANCE PAY",
                 "LEAVE ENCASHMENT",
                 "ANNUAL WAGE SUPPLEMENT",
+                "NOTICE IN LIEU_COMPANY",
+                "LONG SERVICE AWARD - 3 YEARS",
             ]:
-                value = df.loc[kw, column_current].replace(",", "")
+                try:
+                    value = df.loc[kw, column_current].replace(",", "")
+                except KeyError:
+                    continue
                 if value:
                     self.bonus_pay += Decimal(value)
                     data_entries.append(kw)
         except Exception as e:
-            lg.warning(f"basic_pay parse error: {e=}")
+            lg.warning(f"bonus_pay parse error: {e=}")
 
         lg.info(f"updated {data_entries=}")
         return df
@@ -242,27 +269,24 @@ class AmsPayslip(PdfObject):
         column_current = "amt"
         try:
             kw = "CHINESE DEVELOPMENT ASSISTANC"
-            deductable_cdc = (
-                df.loc[kw, column_current].replace(",", "").replace("-", "")
-            )
+            deductable_cdc = str(df.loc[kw, column_current])
+            deductable_cdc = deductable_cdc.replace(",", "").replace("-", "")
             self.deductable_cdc = Decimal(deductable_cdc)
             data_entries.append(kw)
         except Exception as e:
             lg.warning(f"deductable_cdc parse error: {e=}")
         try:
             kw = "CPF CONTRIBUTION - EMPLOYEE"
-            deductable_cpf = (
-                df.loc[kw, column_current].replace(",", "").replace("-", "")
-            )
+            deductable_cpf = str(df.loc[kw, column_current])
+            deductable_cpf = deductable_cpf.replace(",", "").replace("-", "")
             self.deductable_cpf = Decimal(deductable_cpf)
             data_entries.append(kw)
         except Exception as e:
             lg.warning(f"deductable_cpf parse error: {e=}")
         try:
             kw = "TOTAL DEDUCTIONS"
-            deductable_pay = (
-                df.loc[kw, column_current].replace(",", "").replace("-", "")
-            )
+            deductable_pay = str(df.loc[kw, column_current])
+            deductable_pay = deductable_pay.replace(",", "").replace("-", "")
             self.deductable_pay = Decimal(deductable_pay)
             data_entries.append(kw)
         except Exception as e:
@@ -280,14 +304,14 @@ class AmsPayslip(PdfObject):
         column_current = "CURRENT EARNING"
         try:
             kw = "Employee CPF"
-            cpf_employee = df.loc[kw, column_current].replace(",", "")
+            cpf_employee = str(df.loc[kw, column_current]).replace(",", "")
             self.cpf_employee = Decimal(cpf_employee)
             data_entries.append(kw)
         except Exception as e:
             lg.warning(f"cpf_employee parse error: {e=}")
         try:
             kw = "Employer CPF"
-            cpf_employer = df.loc[kw, column_current].replace(",", "")
+            cpf_employer = str(df.loc[kw, column_current]).replace(",", "")
             self.cpf_employer = Decimal(cpf_employer)
             data_entries.append(kw)
         except Exception as e:
@@ -296,18 +320,22 @@ class AmsPayslip(PdfObject):
         return df
 
     def crunch_data(self) -> pd.DataFrame:
-        self.net_pay = (
+        self.accounting_pay = (
             self.basic_pay
+            + self.bonus_pay
             + self.allowances_pckg
             - self.deductable_cdc
             - self.deductable_cpf
         )
 
+        self.actual_net_pay = self.accounting_pay + self.allowances_work
+
         df = pd.DataFrame(
             index=[self.date],
             data=[
                 {
-                    "net_pay": self.net_pay,
+                    "accounting_pay": self.accounting_pay,
+                    "actual_net_pay": self.actual_net_pay,
                     "basic_pay": self.basic_pay,
                     "bonus_pay": self.bonus_pay,
                     "aws_pay": self.aws_pay,
@@ -344,14 +372,12 @@ def main():
         ps.get_pay_summary_table()
         ps.get_deductions_table()
         dflist.append(ps.crunch_data())
-        # print(repr(ps))
-        # if i == 5:
-        # if i == 0:
-        #     break
-    # print(ps)
+
+    outname = "output.xlsx"
     df = pd.concat(dflist)
     print(df)
-    df.to_excel("output.xlsx")
+    # df.to_excel("output.xlsx")
+    # lg.info(f"exported {outname}")
 
 
 if __name__ == "__main__":
