@@ -5,6 +5,10 @@ from pathlib import Path
 APP_NAME = "ppys"
 
 
+class MissingEnvVariables(Exception):
+    pass
+
+
 class NonePath:
     # Monkey patching to create a "None" Path object
 
@@ -23,7 +27,7 @@ class NonePath:
 
 class PathFinder:
     def __init__(self, resources_foldername: str = "resources"):
-        self.cwd = Path(__file__).parent
+        self.cwd = Path(__file__).parent.parent
         if resources_foldername:
             self.set_resources_dir(resources_foldername)
         else:
@@ -31,6 +35,10 @@ class PathFinder:
 
     def __call__(self, name) -> Path:
         return self.get_resource(name)
+
+    def get_payslips(self) -> list[Path]:
+        files = [x for x in self.cwd.glob("*.[pP][dD][fF]")]
+        return sorted(files)
 
     def set_resources_dir(self, name: str = "resources") -> Path:
         resources_dir = self.cwd / name
