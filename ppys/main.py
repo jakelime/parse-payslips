@@ -20,6 +20,9 @@ AREA_DEDUCTIONS_BOX = [19.57, 51.15, 50.41, 100.0]
 AREA_PAYTABLE_BOX = [19.57, 0.0, 50.41, 51.15]
 AREA_PAYSUMMARY_BOX = [50.76, 50.66, 72.57, 100.0]
 AREA_DATE_BOX = [6.68, 63.16, 15.83, 94.9]
+SAP_AREA_DATE_BOX = [21.24, 44.17, 30.37, 69.48]
+SAP_AREA_PAYTABLE_BOX = [30.76, 4.58, 75.55, 39.14]
+SAP_AREA_PAY_SUMMARY_BOX = [30.89, 44.61, 40.02, 63.73]
 
 
 class PdfObject:
@@ -61,11 +64,13 @@ class PdfObject:
             dfs = [pd.DataFrame()]
         return dfs[0]
 
-    def get_pay_summary_table(self, area: list[float]) -> pd.DataFrame:
+    def get_pay_summary_table(
+        self, area: list[float], pandas_options: dict = {"header": None}
+    ) -> pd.DataFrame:
         dfs = tabula.io.read_pdf(
             self.filepath,
             pages=[1],
-            pandas_options={"header": None},
+            pandas_options=pandas_options,
             area=area,  # [top, left, bottom, right]
             relative_area=True,  # enables % from area argument
         )
@@ -104,7 +109,7 @@ class PdfObject:
         lg.info(f"saved to {filepath.name}")
 
 
-class FlexHRPayslip(PdfObject):
+class Payslip(PdfObject):
     date: datetime.date
     actual_net_pay: Decimal
     accounting_pay: Decimal
@@ -172,6 +177,38 @@ class FlexHRPayslip(PdfObject):
         allowances_pckg={self.allowances_pckg},
         )"""
 
+    def crunch_data(self) -> pd.DataFrame:
+        self.deductable_cpf = self.cpf_employee
+        self.deductable_pay = self.deductable_cdc + self.deductable_cpf
+        self.accounting_pay = (
+            self.basic_pay + self.bonus_pay + self.allowances_pckg - self.deductable_pay
+        )
+
+        self.actual_net_pay = self.accounting_pay + self.allowances_work
+        df = pd.DataFrame(
+            index=[self.date],
+            data=[
+                {
+                    "accounting_pay": self.accounting_pay,
+                    "actual_net_pay": self.actual_net_pay,
+                    "basic_pay": self.basic_pay,
+                    "bonus_pay": self.bonus_pay,
+                    "aws_pay": self.aws_pay,
+                    "deductable_cpf": self.deductable_cpf,
+                    "deductable_cdc": self.deductable_cdc,
+                    "deductable_pay": self.deductable_pay,
+                    "cpf_employee": self.cpf_employee,
+                    "cpf_employer": self.cpf_employer,
+                    "allowances_pckg": self.allowances_pckg,
+                    "allowances_work": self.allowances_work,
+                }
+            ],
+        )
+
+        return df
+
+
+class FlexHRPayslip(Payslip):
     @staticmethod
     def change_df_columns_descr_amt(df):
         cols = list(df.columns)
@@ -295,60 +332,138 @@ class FlexHRPayslip(PdfObject):
         return df
 
     def get_pay_summary_table(self) -> pd.DataFrame:
-        df = super().get_pay_summary_table(area=AREA_PAYSUMMARY_BOX)
+        df = super().get_pay_summary_table(
+            area=AREA_PAYSUMMARY_BOX, pandas_options={"header": 0}
+        )
         cols = list(df.columns)
         cols[0] = "descr"
         df.columns = cols
         df.set_index("descr", inplace=True)
         data_entries = []
         column_current = "CURRENT EARNING"
+        kw = "Employee CPF"
         try:
-            kw = "Employee CPF"
             cpf_employee = str(df.loc[kw, column_current]).replace(",", "")
             self.cpf_employee = Decimal(cpf_employee)
             data_entries.append(kw)
         except Exception as e:
-            lg.warning(f"cpf_employee parse error: {e=}")
+            lg.warning(f"{kw} parse error: {e=}")
+        kw = "Employer CPF"
         try:
-            kw = "Employer CPF"
             cpf_employer = str(df.loc[kw, column_current]).replace(",", "")
             self.cpf_employer = Decimal(cpf_employer)
             data_entries.append(kw)
         except Exception as e:
-            lg.warning(f"cpf_employer parse error: {e=}")
+            lg.warning(f"{kw} parse error: {e=}")
         lg.info(f"updated {data_entries=}")
         return df
 
-    def crunch_data(self) -> pd.DataFrame:
-        self.accounting_pay = (
-            self.basic_pay
-            + self.bonus_pay
-            + self.allowances_pckg
-            - self.deductable_cdc
-            - self.deductable_cpf
+
+class SAPPayslip(Payslip):
+    def __init__(self, filepath: Path):
+        super().__init__(filepath=filepath)
+
+    def __repr__(self) -> str:
+        return super().__repr__()
+
+    def get_pay_date(self) -> datetime.date:
+        df = super().get_paytable(area=SAP_AREA_DATE_BOX)
+        payperiod_text = str(df.iloc[0, 0])
+        date_end = payperiod_text.split("to")[-1].strip()
+        date_end = datetime.datetime.strptime(date_end, "%d/%m/%Y")
+        self.date = date_end
+        return self.date
+
+    def get_paytable(self) -> pd.DataFrame:
+        df0 = super().get_paytable(area=SAP_AREA_PAYTABLE_BOX)
+        df0.columns = ["descr", "amt"]
+        df0["amt"] = df0["amt"].apply(
+            lambda x: x.strip("+").strip("-").replace(",", "")
         )
 
-        self.actual_net_pay = self.accounting_pay + self.allowances_work
+        df1 = super().get_paytable(area=SAP_AREA_PAY_SUMMARY_BOX)
+        df1.columns = ["descr", "amt"]
 
-        df = pd.DataFrame(
-            index=[self.date],
-            data=[
-                {
-                    "accounting_pay": self.accounting_pay,
-                    "actual_net_pay": self.actual_net_pay,
-                    "basic_pay": self.basic_pay,
-                    "bonus_pay": self.bonus_pay,
-                    "aws_pay": self.aws_pay,
-                    "deductable_cpf": self.deductable_cpf,
-                    "deductable_cdc": self.deductable_cdc,
-                    "deductable_pay": self.deductable_pay,
-                    "cpf_employee": self.cpf_employee,
-                    "cpf_employer": self.cpf_employer,
-                    "allowances_pckg": self.allowances_pckg,
-                    "allowances_work": self.allowances_work,
-                }
-            ],
-        )
+        df = pd.concat([df0, df1])
+        df.set_index("descr", inplace=True)
+
+        column_current = "amt"
+        data_entries = []
+
+        kw = "Basic Salary"
+        try:
+            basic_pay = str(df.loc[kw, column_current])
+            self.basic_pay = Decimal(basic_pay)
+            data_entries.append(kw)
+        except Exception as e:
+            lg.warning(f"{kw} parse error: {e=}")
+
+        kw = "CPF Employee"
+        try:
+            cpf_employee = str(df.loc[kw, column_current])
+            self.cpf_employee = Decimal(cpf_employee)
+            data_entries.append(kw)
+        except Exception as e:
+            lg.warning(f"{kw} parse error: {e=}")
+
+        kw = "CPF Employer"
+        try:
+            cpf_employer = str(df.loc[kw, column_current])
+            self.cpf_employer = Decimal(cpf_employer)
+            data_entries.append(kw)
+        except Exception as e:
+            lg.warning(f"{kw} parse error: {e=}")
+
+        for kw in [
+            "Mobile Phone Subsidy",
+            "Executive Health Screening",
+            "Flex Benefit - Optical",
+            "Health Insurance Premium (Self)",
+        ]:
+            try:
+                val = str(df.loc[kw, column_current])
+                self.allowances_pckg += Decimal(val)
+                data_entries.append(kw)
+            except Exception as e:
+                lg.warning(f"{kw} parse error: {e=}")
+
+        for kw in [
+            "Profit Sharing Bonus",
+            "Annual Wage Supplement",
+        ]:
+            try:
+                val = str(df.loc[kw, column_current])
+                self.bonus_pay += Decimal(val)
+                data_entries.append(kw)
+            except Exception as e:
+                lg.warning(f"{kw} parse error: {e=}")
+
+        for kw in [
+            "Urgent Task Allowance (O)",
+            "Urgent Task Allowance (A)",
+            "Prosperity Ang Bao",
+            "Specialist",
+            "Factory/Production supplies",
+            "Compassionate Token",
+            "Entertainment",
+            "Lucky Draw_Non-Taxable",
+            "Taxi Claim",
+        ]:
+            try:
+                val = str(df.loc[kw, column_current])
+                self.allowances_work += Decimal(val)
+                data_entries.append(kw)
+            except Exception as e:
+                lg.warning(f"{kw} parse error: {e=}")
+
+        kw = "Fund - CDAC"
+        try:
+            val = str(df.loc[kw, column_current])
+            self.deductable_cdc += Decimal(val)
+            data_entries.append(kw)
+        except Exception as e:
+            lg.warning(f"{kw} parse error: {e=}")
+
         return df
 
 
@@ -361,9 +476,8 @@ def load_environment():
     print(f"{PASSWORD=}")
 
 
-def main():
+def load_ams_payslips_2022():
     pathfinder = utils.PathFinder()
-
     dflist = []
     for i, payslip in enumerate(pathfinder.get_payslips()):
         ps = FlexHRPayslip(payslip)
@@ -371,6 +485,22 @@ def main():
         ps.get_paytable()
         ps.get_pay_summary_table()
         ps.get_deductions_table()
+        dflist.append(ps.crunch_data())
+        # break
+    outname = "output.xlsx"
+    df = pd.concat(dflist)
+    print(df)
+    df.to_excel("output.xlsx")
+    lg.info(f"exported {outname}")
+
+
+def load_ams_payslips_2021():
+    pathfinder = utils.PathFinder()
+    dflist = []
+    for i, payslip in enumerate(pathfinder.get_payslips()):
+        ps = SAPPayslip(payslip)
+        ps.get_pay_date()
+        ps.get_paytable()
         dflist.append(ps.crunch_data())
 
     outname = "output.xlsx"
@@ -381,4 +511,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    load_ams_payslips_2021()
+    # load_ams_payslips_2022()
