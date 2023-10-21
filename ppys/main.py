@@ -104,7 +104,7 @@ class PdfObject:
         lg.info(f"saved to {filepath.name}")
 
 
-class AmsPayslip(PdfObject):
+class FlexHRPayslip(PdfObject):
     date: datetime.date
     actual_net_pay: Decimal
     accounting_pay: Decimal
@@ -366,7 +366,7 @@ def main():
 
     dflist = []
     for i, payslip in enumerate(pathfinder.get_payslips()):
-        ps = AmsPayslip(payslip)
+        ps = FlexHRPayslip(payslip)
         ps.get_pay_date()
         ps.get_paytable()
         ps.get_pay_summary_table()
